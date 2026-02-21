@@ -10,13 +10,19 @@ import shutil
 import time
 import uuid
 from io import BytesIO
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from zipfile import ZipFile
 
 from fastapi import Response, UploadFile
 from pydantic import BaseModel, Field
 
 from llama_stack.core.datatypes import StackConfig
+from llama_stack.core.skills.bundle import (
+    extract_metadata,
+    extract_zip,
+    files_to_map,
+    validate_bundle,
+)
 from llama_stack.core.storage.kvstore import KVStore, kvstore_impl
 from llama_stack.log import get_logger
 from llama_stack_api import (
@@ -78,33 +84,49 @@ class SkillServiceImpl(Skills):
         return self.storage_dir / skill_id
 
     async def create_skill(self, files: list[UploadFile]) -> Skill:
-        """Create a new skill from uploaded files."""
+        """Create a new skill from uploaded files.
+
+        Accepts either a single zip archive or multiple files via multipart
+        upload.  The bundle must contain exactly one SKILL.md manifest.
+        Name and description are extracted from its YAML frontmatter.
+        """
         if not files:
             raise ValueError("At least one file is required to create a skill")
+
+        names: list[str] = []
+        contents: list[bytes] = []
+        for f in files:
+            names.append(f.filename or "")
+            contents.append(await f.read())
+
+        # Single zip upload: extract the archive into a file map
+        if len(files) == 1 and (
+            (files[0].content_type and "zip" in files[0].content_type) or (names[0].lower().endswith(".zip"))
+        ):
+            file_map = extract_zip(contents[0])
+        else:
+            file_map = files_to_map(names, contents)
+
+        validate_bundle(file_map)
+        name, description = extract_metadata(file_map)
 
         skill_id = f"skill_{uuid.uuid4().hex[:24]}"
         created_at = int(time.time())
 
-        first_filename = files[0].filename or "untitled"
-        name = first_filename.rsplit(".", 1)[0] if "." in first_filename else first_filename
-
         skill_dir = self._skill_dir(skill_id)
         skill_dir.mkdir(parents=True, exist_ok=True)
 
-        for upload_file in files:
-            raw_name = upload_file.filename or f"file_{uuid.uuid4().hex[:8]}"
-            filename = Path(raw_name).name  # strip directory components
-            if not filename:
-                filename = f"file_{uuid.uuid4().hex[:8]}"
-            file_path = skill_dir / filename
-            content = await upload_file.read()
-            file_path.write_bytes(content)
+        for relative_path, data in file_map.items():
+            safe_parts = [p for p in PurePosixPath(relative_path).parts if p not in (".", "..")]
+            dest = skill_dir / Path(*safe_parts)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
 
         skill = Skill(
             id=skill_id,
             created_at=created_at,
             default_version="1",
-            description="",
+            description=description,
             latest_version="1",
             name=name,
         )
@@ -195,9 +217,9 @@ class SkillServiceImpl(Skills):
 
         buffer = BytesIO()
         with ZipFile(buffer, "w") as zf:
-            for file_path in sorted(skill_dir.iterdir()):
+            for file_path in sorted(skill_dir.rglob("*")):
                 if file_path.is_file():
-                    zf.write(file_path, file_path.name)
+                    zf.write(file_path, file_path.relative_to(skill_dir))
 
         buffer.seek(0)
         return Response(

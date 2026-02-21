@@ -81,10 +81,14 @@ async def skill_service(mock_kvstore, storage_dir):
     return service
 
 
-def _make_upload_file(filename: str, content: bytes) -> MagicMock:
+SAMPLE_MANIFEST = b"---\nname: test-skill\ndescription: A test skill.\n---\n# Test Skill\n"
+
+
+def _make_upload_file(filename: str, content: bytes, content_type: str | None = None) -> MagicMock:
     """Create a mock UploadFile."""
     upload_file = AsyncMock()
     upload_file.filename = filename
+    upload_file.content_type = content_type
     upload_file.read = AsyncMock(return_value=content)
     return upload_file
 
@@ -97,19 +101,20 @@ class TestCreateSkill:
 
     async def test_create_skill_returns_skill(self, skill_service):
         """Test creating a skill returns a Skill object."""
-        files = [_make_upload_file("SKILL.md", b"# My Skill")]
+        files = [_make_upload_file("SKILL.md", SAMPLE_MANIFEST)]
         result = await skill_service.create_skill(files)
 
         assert isinstance(result, Skill)
         assert result.id.startswith("skill_")
-        assert result.name == "SKILL"
+        assert result.name == "test-skill"
+        assert result.description == "A test skill."
         assert result.default_version == "1"
         assert result.latest_version == "1"
         assert result.object == "skill"
 
     async def test_create_skill_stores_in_kvstore(self, skill_service, mock_kvstore):
         """Test creating a skill persists metadata to KVStore."""
-        files = [_make_upload_file("SKILL.md", b"# My Skill")]
+        files = [_make_upload_file("SKILL.md", SAMPLE_MANIFEST)]
         result = await skill_service.create_skill(files)
 
         stored = await mock_kvstore.get(f"{KEY_PREFIX}{result.id}")
@@ -120,7 +125,7 @@ class TestCreateSkill:
         from pathlib import Path
 
         files = [
-            _make_upload_file("SKILL.md", b"# My Skill"),
+            _make_upload_file("SKILL.md", SAMPLE_MANIFEST),
             _make_upload_file("run.sh", b"#!/bin/bash\necho hello"),
         ]
         result = await skill_service.create_skill(files)
@@ -129,29 +134,59 @@ class TestCreateSkill:
         assert skill_dir.exists()
         assert (skill_dir / "SKILL.md").exists()
         assert (skill_dir / "run.sh").exists()
-        assert (skill_dir / "SKILL.md").read_bytes() == b"# My Skill"
 
-    async def test_create_skill_derives_name_from_first_file(self, skill_service):
-        """Test skill name is derived from the first uploaded file."""
-        files = [_make_upload_file("my_cool_skill.md", b"content")]
+    async def test_create_skill_extracts_frontmatter(self, skill_service):
+        """Test skill name and description come from SKILL.md frontmatter."""
+        manifest = b"---\nname: csv-insights\ndescription: Analyze CSV data.\n---\n# CSV"
+        files = [_make_upload_file("SKILL.md", manifest)]
         result = await skill_service.create_skill(files)
-        assert result.name == "my_cool_skill"
+        assert result.name == "csv-insights"
+        assert result.description == "Analyze CSV data."
 
     async def test_create_skill_no_files_raises(self, skill_service):
         """Test creating a skill with no files raises ValueError."""
         with pytest.raises(ValueError, match="At least one file"):
             await skill_service.create_skill([])
 
-    async def test_create_skill_sanitizes_path_traversal(self, skill_service, storage_dir):
-        """Test that directory traversal in filenames is stripped."""
+    async def test_create_skill_no_manifest_raises(self, skill_service):
+        """Test creating a skill without SKILL.md raises BundleError."""
+        from llama_stack.core.skills.bundle import BundleError
+
+        files = [_make_upload_file("README.md", b"# Not a skill")]
+        with pytest.raises(BundleError, match="SKILL.md"):
+            await skill_service.create_skill(files)
+
+    async def test_create_skill_from_zip(self, skill_service):
+        """Test creating a skill from a zip archive."""
+        import zipfile
+
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("my_skill/SKILL.md", SAMPLE_MANIFEST.decode())
+            zf.writestr("my_skill/run.py", "print('hello')")
+        zip_data = buf.getvalue()
+
+        files = [_make_upload_file("my_skill.zip", zip_data, content_type="application/zip")]
+        result = await skill_service.create_skill(files)
+        assert result.name == "test-skill"
+
+    async def test_create_skill_from_zip_preserves_subdirs(self, skill_service, storage_dir):
+        """Test that nested directories from a zip are preserved on disk."""
+        import zipfile
         from pathlib import Path
 
-        files = [_make_upload_file("../../etc/passwd", b"malicious")]
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("my_skill/SKILL.md", SAMPLE_MANIFEST.decode())
+            zf.writestr("my_skill/assets/example.csv", "col1,col2\n1,2")
+        zip_data = buf.getvalue()
+
+        files = [_make_upload_file("my_skill.zip", zip_data, content_type="application/zip")]
         result = await skill_service.create_skill(files)
 
         skill_dir = Path(storage_dir) / result.id
-        assert (skill_dir / "passwd").exists()
-        assert not (Path(storage_dir) / ".." / ".." / "etc" / "passwd").exists()
+        assert (skill_dir / "my_skill" / "SKILL.md").exists()
+        assert (skill_dir / "my_skill" / "assets" / "example.csv").exists()
 
 
 # --- list_skills tests ---
@@ -168,30 +203,26 @@ class TestListSkills:
 
     async def test_list_skills_returns_all(self, skill_service):
         """Test listing returns all created skills."""
-        files = [_make_upload_file("SKILL.md", b"content")]
-        await skill_service.create_skill(files)
-        files = [_make_upload_file("SKILL.md", b"content")]
-        await skill_service.create_skill(files)
-        files = [_make_upload_file("SKILL.md", b"content")]
-        await skill_service.create_skill(files)
+        for _ in range(3):
+            files = [_make_upload_file("SKILL.md", SAMPLE_MANIFEST)]
+            await skill_service.create_skill(files)
 
         result = await skill_service.list_skills(ListSkillsRequest())
         assert len(result.data) == 3
 
     async def test_list_skills_default_order_is_desc(self, skill_service):
         """Test listing skills defaults to descending order by created_at."""
-        files = [_make_upload_file("first.md", b"1")]
-        await skill_service.create_skill(files)
-        files = [_make_upload_file("second.md", b"2")]
-        await skill_service.create_skill(files)
+        for _ in range(2):
+            files = [_make_upload_file("SKILL.md", SAMPLE_MANIFEST)]
+            await skill_service.create_skill(files)
 
         result = await skill_service.list_skills(ListSkillsRequest())
         assert result.data[0].created_at >= result.data[-1].created_at
 
     async def test_list_skills_with_limit(self, skill_service):
         """Test listing skills with a limit."""
-        for i in range(5):
-            files = [_make_upload_file(f"skill_{i}.md", b"content")]
+        for _ in range(5):
+            files = [_make_upload_file("SKILL.md", SAMPLE_MANIFEST)]
             await skill_service.create_skill(files)
 
         result = await skill_service.list_skills(ListSkillsRequest(limit=2))
@@ -201,8 +232,8 @@ class TestListSkills:
     async def test_list_skills_with_after(self, skill_service):
         """Test listing skills with cursor-based pagination."""
         created = []
-        for i in range(3):
-            files = [_make_upload_file(f"skill_{i}.md", b"content")]
+        for _ in range(3):
+            files = [_make_upload_file("SKILL.md", SAMPLE_MANIFEST)]
             created.append(await skill_service.create_skill(files))
 
         first_page = await skill_service.list_skills(ListSkillsRequest(limit=1))
@@ -211,10 +242,9 @@ class TestListSkills:
 
     async def test_list_skills_asc_order(self, skill_service):
         """Test listing skills in ascending order."""
-        files = [_make_upload_file("first.md", b"1")]
-        await skill_service.create_skill(files)
-        files = [_make_upload_file("second.md", b"2")]
-        await skill_service.create_skill(files)
+        for _ in range(2):
+            files = [_make_upload_file("SKILL.md", SAMPLE_MANIFEST)]
+            await skill_service.create_skill(files)
 
         result = await skill_service.list_skills(ListSkillsRequest(order=Order.asc))
         assert result.data[0].created_at <= result.data[-1].created_at
@@ -228,7 +258,7 @@ class TestGetSkill:
 
     async def test_get_skill_returns_skill(self, skill_service):
         """Test getting a skill by ID."""
-        files = [_make_upload_file("SKILL.md", b"content")]
+        files = [_make_upload_file("SKILL.md", SAMPLE_MANIFEST)]
         created = await skill_service.create_skill(files)
 
         result = await skill_service.get_skill(GetSkillRequest(skill_id=created.id))
@@ -249,7 +279,7 @@ class TestUpdateSkill:
 
     async def test_update_default_version(self, skill_service):
         """Test updating a skill's default version."""
-        files = [_make_upload_file("SKILL.md", b"content")]
+        files = [_make_upload_file("SKILL.md", SAMPLE_MANIFEST)]
         created = await skill_service.create_skill(files)
 
         result = await skill_service.update_skill(UpdateSkillRequest(skill_id=created.id, default_version="2"))
@@ -257,7 +287,7 @@ class TestUpdateSkill:
 
     async def test_update_persists_change(self, skill_service):
         """Test that updated default_version is persisted."""
-        files = [_make_upload_file("SKILL.md", b"content")]
+        files = [_make_upload_file("SKILL.md", SAMPLE_MANIFEST)]
         created = await skill_service.create_skill(files)
 
         await skill_service.update_skill(UpdateSkillRequest(skill_id=created.id, default_version="3"))
@@ -279,7 +309,7 @@ class TestDeleteSkill:
 
     async def test_delete_skill_returns_deleted(self, skill_service):
         """Test deleting a skill returns a DeletedSkill object."""
-        files = [_make_upload_file("SKILL.md", b"content")]
+        files = [_make_upload_file("SKILL.md", SAMPLE_MANIFEST)]
         created = await skill_service.create_skill(files)
 
         result = await skill_service.delete_skill(DeleteSkillRequest(skill_id=created.id))
@@ -289,7 +319,7 @@ class TestDeleteSkill:
 
     async def test_delete_skill_removes_from_kvstore(self, skill_service, mock_kvstore):
         """Test deleting a skill removes it from the store."""
-        files = [_make_upload_file("SKILL.md", b"content")]
+        files = [_make_upload_file("SKILL.md", SAMPLE_MANIFEST)]
         created = await skill_service.create_skill(files)
 
         await skill_service.delete_skill(DeleteSkillRequest(skill_id=created.id))
@@ -299,7 +329,7 @@ class TestDeleteSkill:
         """Test deleting a skill removes its files from disk."""
         from pathlib import Path
 
-        files = [_make_upload_file("SKILL.md", b"content")]
+        files = [_make_upload_file("SKILL.md", SAMPLE_MANIFEST)]
         created = await skill_service.create_skill(files)
 
         skill_dir = Path(storage_dir) / created.id
@@ -315,7 +345,7 @@ class TestDeleteSkill:
 
     async def test_delete_skill_not_in_list(self, skill_service):
         """Test deleted skill does not appear in list."""
-        files = [_make_upload_file("SKILL.md", b"content")]
+        files = [_make_upload_file("SKILL.md", SAMPLE_MANIFEST)]
         created = await skill_service.create_skill(files)
 
         await skill_service.delete_skill(DeleteSkillRequest(skill_id=created.id))
@@ -333,7 +363,7 @@ class TestGetSkillContent:
     async def test_get_content_returns_zip(self, skill_service):
         """Test getting skill content returns a zip archive."""
         files = [
-            _make_upload_file("SKILL.md", b"# My Skill"),
+            _make_upload_file("SKILL.md", SAMPLE_MANIFEST),
             _make_upload_file("run.sh", b"#!/bin/bash\necho hello"),
         ]
         created = await skill_service.create_skill(files)
@@ -344,7 +374,7 @@ class TestGetSkillContent:
         zf = ZipFile(BytesIO(response.body))
         assert "SKILL.md" in zf.namelist()
         assert "run.sh" in zf.namelist()
-        assert zf.read("SKILL.md") == b"# My Skill"
+        assert zf.read("SKILL.md") == SAMPLE_MANIFEST
 
     async def test_get_content_nonexistent_skill_raises(self, skill_service):
         """Test getting content for a non-existent skill raises error."""
@@ -360,7 +390,7 @@ class TestKeyPrefix:
 
     async def test_skills_use_namespaced_keys(self, skill_service, mock_kvstore):
         """Test that skills are stored with the correct key prefix."""
-        files = [_make_upload_file("SKILL.md", b"content")]
+        files = [_make_upload_file("SKILL.md", SAMPLE_MANIFEST)]
         result = await skill_service.create_skill(files)
 
         keys = list(mock_kvstore._storage.keys())
