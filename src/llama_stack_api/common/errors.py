@@ -133,6 +133,13 @@ class ConnectorToolNotFoundError(ResourceNotFoundError):
         )
 
 
+class SkillNotFoundError(ResourceNotFoundError):
+    """raised when Llama Stack cannot find a referenced skill"""
+
+    def __init__(self, skill_id: str) -> None:
+        super().__init__(skill_id, resource_type="Skill", client_command="skills.list")
+
+
 class OpenAIFileObjectNotFoundError(ResourceNotFoundError):
     """raised when Llama Stack cannot find a referenced file"""
 
