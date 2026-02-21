@@ -96,13 +96,6 @@ class SkillServiceImpl(Skills):
     def _version_dir(self, skill_id: str, version: int) -> Path:
         return self.storage_dir / skill_id / f"v{version}"
 
-    def _read_uploads(self, files: list[UploadFile]) -> tuple[list[str], list[bytes]]:
-        """Synchronously collect filenames from upload files.
-
-        File contents must be read asynchronously via _build_file_map.
-        """
-        return [f.filename or "" for f in files], []
-
     async def _build_file_map(self, files: list[UploadFile]) -> dict[str, bytes]:
         """Read uploaded files and produce a validated file map."""
         names: list[str] = []

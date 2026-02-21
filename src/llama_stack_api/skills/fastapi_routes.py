@@ -41,7 +41,6 @@ from .models import (
 get_skill_request = create_path_dependency(GetSkillRequest)
 get_delete_skill_request = create_path_dependency(DeleteSkillRequest)
 get_list_skills_request = create_query_dependency(ListSkillsRequest)
-get_list_skill_versions_request = create_query_dependency(ListSkillVersionsRequest)
 
 
 def create_router(impl: Skills) -> APIRouter:
