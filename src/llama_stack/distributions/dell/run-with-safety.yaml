@@ -115,6 +115,9 @@ storage:
     connectors:
       namespace: connectors
       backend: kv_default
+    skills:
+      namespace: skills
+      backend: kv_default
 registered_resources:
   models:
   - metadata: {}

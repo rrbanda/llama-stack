@@ -260,6 +260,10 @@ class RunConfigSettings(BaseModel):
                 backend="kv_default",
                 namespace="connectors",
             ).model_dump(exclude_none=True),
+            "skills": KVStoreReference(
+                backend="kv_default",
+                namespace="skills",
+            ).model_dump(exclude_none=True),
         }
 
         storage_config = dict(

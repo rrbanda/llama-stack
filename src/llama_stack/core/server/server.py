@@ -447,6 +447,7 @@ def create_app() -> StackApp:
     apis_to_serve.add("prompts")
     apis_to_serve.add("conversations")
     apis_to_serve.add("connectors")
+    apis_to_serve.add("skills")
 
     for api_str in apis_to_serve:
         api = Api(api_str)

@@ -52,6 +52,7 @@ CATEGORIES = [
     "scoring",
     "tests",
     "connectors",
+    "skills",
 ]
 UNCATEGORIZED = "uncategorized"
 

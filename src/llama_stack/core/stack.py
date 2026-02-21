@@ -25,6 +25,7 @@ from llama_stack.core.prompts.prompts import PromptServiceConfig, PromptServiceI
 from llama_stack.core.providers import ProviderImpl, ProviderImplConfig
 from llama_stack.core.resolver import ProviderRegistry, resolve_impls
 from llama_stack.core.routing_tables.common import CommonRoutingTableImpl
+from llama_stack.core.skills.skills import SkillServiceConfig, SkillServiceImpl
 from llama_stack.core.storage.datatypes import (
     InferenceStoreReference,
     KVStoreReference,
@@ -573,6 +574,11 @@ def add_internal_implementations(impls: dict[Api, Any], config: StackConfig, pol
     )
     impls[Api.connectors] = connectors_impl
 
+    skills_impl = SkillServiceImpl(
+        SkillServiceConfig(config=config),
+    )
+    impls[Api.skills] = skills_impl
+
 
 def _initialize_storage(run_config: StackConfig):
     kv_backends: dict[str, StorageBackendConfig] = {}
@@ -635,6 +641,8 @@ class Stack:
             await impls[Api.conversations].initialize()
         if Api.connectors in impls:
             await impls[Api.connectors].initialize()
+        if Api.skills in impls:
+            await impls[Api.skills].initialize()
 
         await register_resources(self.run_config, impls)
         await register_connectors(self.run_config, impls)
@@ -785,6 +793,7 @@ def run_config_from_adhoc_config_spec(
                 conversations=SqlStoreReference(backend="sql_default", table_name="openai_conversations"),
                 prompts=KVStoreReference(backend="kv_default", namespace="prompts"),
                 connectors=KVStoreReference(backend="kv_default", namespace="connectors"),
+                skills=KVStoreReference(backend="kv_default", namespace="skills"),
             ),
         ),
     )

@@ -9,6 +9,7 @@
 This package contains the Skills API definition, models, and FastAPI router.
 """
 
+from . import fastapi_routes
 from .api import Skills
 from .models import (
     DeletedSkill,
@@ -31,4 +32,5 @@ __all__ = [
     "Skill",
     "Skills",
     "UpdateSkillRequest",
+    "fastapi_routes",
 ]

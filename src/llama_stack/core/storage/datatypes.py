@@ -296,6 +296,10 @@ class ServerStoresConfig(BaseModel):
         default=KVStoreReference(backend="kv_default", namespace="connectors"),
         description="Connectors store configuration (uses KV backend)",
     )
+    skills: KVStoreReference | None = Field(
+        default=KVStoreReference(backend="kv_default", namespace="skills"),
+        description="Skills store configuration (uses KV backend)",
+    )
 
 
 def _default_backends() -> dict[str, StorageBackendConfig]:
