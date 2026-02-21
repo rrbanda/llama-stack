@@ -82,6 +82,53 @@ class GetSkillContentRequest(BaseModel):
     """Request model for downloading a skill zip bundle."""
 
     skill_id: str = Field(..., description="The ID of the skill to download content for.")
+    version: int | None = Field(
+        default=None, description="Version to download. Defaults to the skill's default version."
+    )
+
+
+# --- Skill version models ---
+
+
+@json_schema_type
+class SkillVersion(BaseModel):
+    """A specific version of a skill bundle."""
+
+    version: int = Field(..., description="The version number.")
+    created_at: int = Field(..., description="Unix timestamp (seconds) for when this version was created.")
+    skill_id: str = Field(..., description="The ID of the parent skill.")
+    name: str = Field(..., description="Name extracted from this version's SKILL.md frontmatter.")
+    description: str = Field(..., description="Description extracted from this version's SKILL.md frontmatter.")
+    object: Literal["skill.version"] = Field(
+        default="skill.version", description="The object type, which is always 'skill.version'."
+    )
+
+
+@json_schema_type
+class CreateSkillVersionRequest(BaseModel):
+    """Request model for creating a new skill version."""
+
+    skill_id: str = Field(..., description="The ID of the skill to create a version for.")
+
+
+@json_schema_type
+class ListSkillVersionsRequest(BaseModel):
+    """Request model for listing versions of a skill."""
+
+    skill_id: str = Field(..., description="The ID of the skill to list versions for.")
+    order: Order | None = Field(default=Order.desc, description="Sort order by created_at timestamp ('asc' or 'desc').")
+    limit: int | None = Field(default=None, description="Number of items to retrieve.")
+    after: str | None = Field(
+        default=None, description="Cursor for the last item from the previous pagination request."
+    )
+
+
+@json_schema_type
+class GetSkillVersionRequest(BaseModel):
+    """Request model for getting a specific skill version."""
+
+    skill_id: str = Field(..., description="The ID of the skill.")
+    version: int = Field(..., description="The version number to retrieve.")
 
 
 # Response models
@@ -98,13 +145,29 @@ class ListSkillsResponse(BaseModel):
     object: Literal["list"] = Field(default="list", description="The object type, which is always 'list'.")
 
 
+@json_schema_type
+class ListSkillVersionsResponse(BaseModel):
+    """Paginated response containing a list of skill versions."""
+
+    data: list[SkillVersion] = Field(..., description="A list of skill version items.")
+    first_id: str = Field(..., description="The version number of the first item in the list.")
+    has_more: bool = Field(..., description="Whether there are more items available.")
+    last_id: str = Field(..., description="The version number of the last item in the list.")
+    object: Literal["list"] = Field(default="list", description="The object type, which is always 'list'.")
+
+
 __all__ = [
+    "CreateSkillVersionRequest",
     "DeletedSkill",
     "DeleteSkillRequest",
     "GetSkillContentRequest",
     "GetSkillRequest",
+    "GetSkillVersionRequest",
     "ListSkillsRequest",
     "ListSkillsResponse",
+    "ListSkillVersionsRequest",
+    "ListSkillVersionsResponse",
     "Skill",
+    "SkillVersion",
     "UpdateSkillRequest",
 ]

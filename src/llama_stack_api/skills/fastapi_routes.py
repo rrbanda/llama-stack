@@ -12,30 +12,36 @@ FastAPI route decorators.
 
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Path, UploadFile
+from fastapi import APIRouter, Body, Depends, Path, Query, UploadFile
 from fastapi.param_functions import File
 from fastapi.responses import Response
 
+from llama_stack_api.common.responses import Order
 from llama_stack_api.router_utils import create_path_dependency, create_query_dependency, standard_responses
 from llama_stack_api.version import LLAMA_STACK_API_V1ALPHA
 
 from .api import Skills
 from .models import (
+    CreateSkillVersionRequest,
     DeletedSkill,
     DeleteSkillRequest,
     GetSkillContentRequest,
     GetSkillRequest,
+    GetSkillVersionRequest,
     ListSkillsRequest,
     ListSkillsResponse,
+    ListSkillVersionsRequest,
+    ListSkillVersionsResponse,
     Skill,
+    SkillVersion,
     UpdateSkillRequest,
 )
 
 # Dependency functions from Pydantic models
 get_skill_request = create_path_dependency(GetSkillRequest)
 get_delete_skill_request = create_path_dependency(DeleteSkillRequest)
-get_skill_content_request = create_path_dependency(GetSkillContentRequest)
 get_list_skills_request = create_query_dependency(ListSkillsRequest)
+get_list_skill_versions_request = create_query_dependency(ListSkillVersionsRequest)
 
 
 def create_router(impl: Skills) -> APIRouter:
@@ -76,13 +82,12 @@ def create_router(impl: Skills) -> APIRouter:
         return await impl.list_skills(request)
 
     # Route order: more specific routes must come before less specific ones.
-    # /skills/{skill_id}/content must come before /skills/{skill_id}
 
     @router.get(
         "/skills/{skill_id}/content",
         status_code=200,
         summary="Get skill content.",
-        description="Download the skill bundle as a zip archive.",
+        description="Download a skill version's bundle as a zip archive.",
         responses={
             200: {
                 "description": "The skill bundle as a zip archive.",
@@ -91,9 +96,54 @@ def create_router(impl: Skills) -> APIRouter:
         },
     )
     async def get_skill_content(
-        request: Annotated[GetSkillContentRequest, Depends(get_skill_content_request)],
+        skill_id: Annotated[str, Path(description="The ID of the skill.")],
+        version: Annotated[
+            int | None, Query(description="Version to download. Defaults to the skill's default version.")
+        ] = None,
     ) -> Response:
+        request = GetSkillContentRequest(skill_id=skill_id, version=version)
         return await impl.get_skill_content(request)
+
+    @router.post(
+        "/skills/{skill_id}/versions",
+        response_model=SkillVersion,
+        summary="Create a skill version.",
+        description="Upload files to create a new version of an existing skill.",
+    )
+    async def create_skill_version(
+        skill_id: Annotated[str, Path(description="The ID of the skill.")],
+        files: Annotated[list[UploadFile], File(description="The files for the new version.")],
+    ) -> SkillVersion:
+        request = CreateSkillVersionRequest(skill_id=skill_id)
+        return await impl.create_skill_version(request, files)
+
+    @router.get(
+        "/skills/{skill_id}/versions",
+        response_model=ListSkillVersionsResponse,
+        summary="List skill versions.",
+        description="List all versions of a skill.",
+    )
+    async def list_skill_versions(
+        skill_id: Annotated[str, Path(description="The ID of the skill.")],
+        order: Annotated[Order | None, Query(description="Sort order by created_at.")] = Order.desc,
+        limit: Annotated[int | None, Query(description="Number of items to retrieve.")] = None,
+        after: Annotated[str | None, Query(description="Cursor for pagination.")] = None,
+    ) -> ListSkillVersionsResponse:
+        request = ListSkillVersionsRequest(skill_id=skill_id, order=order, limit=limit, after=after)
+        return await impl.list_skill_versions(request)
+
+    @router.get(
+        "/skills/{skill_id}/versions/{version}",
+        response_model=SkillVersion,
+        summary="Get a skill version.",
+        description="Get a specific version of a skill.",
+    )
+    async def get_skill_version(
+        skill_id: Annotated[str, Path(description="The ID of the skill.")],
+        version: Annotated[int, Path(description="The version number.")],
+    ) -> SkillVersion:
+        request = GetSkillVersionRequest(skill_id=skill_id, version=version)
+        return await impl.get_skill_version(request)
 
     @router.get(
         "/skills/{skill_id}",

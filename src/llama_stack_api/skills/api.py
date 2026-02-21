@@ -16,13 +16,18 @@ from typing import Protocol, runtime_checkable
 from fastapi import Response, UploadFile
 
 from .models import (
+    CreateSkillVersionRequest,
     DeletedSkill,
     DeleteSkillRequest,
     GetSkillContentRequest,
     GetSkillRequest,
+    GetSkillVersionRequest,
     ListSkillsRequest,
     ListSkillsResponse,
+    ListSkillVersionsRequest,
+    ListSkillVersionsResponse,
     Skill,
+    SkillVersion,
     UpdateSkillRequest,
 )
 
@@ -60,3 +65,21 @@ class Skills(Protocol):
         self,
         request: GetSkillContentRequest,
     ) -> Response: ...
+
+    # Version management
+
+    async def create_skill_version(
+        self,
+        request: CreateSkillVersionRequest,
+        files: list[UploadFile],
+    ) -> SkillVersion: ...
+
+    async def list_skill_versions(
+        self,
+        request: ListSkillVersionsRequest,
+    ) -> ListSkillVersionsResponse: ...
+
+    async def get_skill_version(
+        self,
+        request: GetSkillVersionRequest,
+    ) -> SkillVersion: ...
