@@ -11,7 +11,7 @@ This module contains the Pydantic models for the Skills API.
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from llama_stack_api.common.responses import Order
 from llama_stack_api.schema_utils import json_schema_type
@@ -68,6 +68,17 @@ class UpdateSkillRequest(BaseModel):
 
     skill_id: str = Field(..., description="The ID of the skill to update.")
     default_version: str = Field(..., description="The skill version number to set as default.")
+
+    @field_validator("default_version")
+    @classmethod
+    def validate_default_version(cls, v: str) -> str:
+        try:
+            n = int(v)
+        except (ValueError, TypeError):
+            raise ValueError(f"default_version must be a numeric string, got {v!r}") from None
+        if n < 1:
+            raise ValueError(f"default_version must be a positive integer, got {v!r}")
+        return v
 
 
 @json_schema_type

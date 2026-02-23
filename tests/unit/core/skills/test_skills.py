@@ -503,3 +503,105 @@ class TestGetSkillVersion:
     async def test_get_version_nonexistent_skill_raises(self, skill_service):
         with pytest.raises(SkillNotFoundError):
             await skill_service.get_skill_version(GetSkillVersionRequest(skill_id="nonexistent", version=1))
+
+
+# --- Version validation tests ---
+
+
+class TestParseVersion:
+    """Tests for _parse_version static method."""
+
+    def test_valid_version(self):
+        from llama_stack.core.skills.skills import SkillServiceImpl
+
+        assert SkillServiceImpl._parse_version("1") == 1
+        assert SkillServiceImpl._parse_version("42") == 42
+
+    def test_non_numeric_raises(self):
+        from llama_stack.core.skills.skills import SkillServiceImpl
+
+        with pytest.raises(ValueError, match="must be a positive integer"):
+            SkillServiceImpl._parse_version("abc")
+
+    def test_zero_raises(self):
+        from llama_stack.core.skills.skills import SkillServiceImpl
+
+        with pytest.raises(ValueError, match="must be a positive integer"):
+            SkillServiceImpl._parse_version("0")
+
+    def test_negative_raises(self):
+        from llama_stack.core.skills.skills import SkillServiceImpl
+
+        with pytest.raises(ValueError, match="must be a positive integer"):
+            SkillServiceImpl._parse_version("-1")
+
+    def test_empty_string_raises(self):
+        from llama_stack.core.skills.skills import SkillServiceImpl
+
+        with pytest.raises(ValueError, match="must be a positive integer"):
+            SkillServiceImpl._parse_version("")
+
+
+class TestUpdateSkillRequestValidation:
+    """Tests for UpdateSkillRequest field validation."""
+
+    def test_valid_version_string(self):
+        req = UpdateSkillRequest(skill_id="skill_abc", default_version="1")
+        assert req.default_version == "1"
+
+    def test_non_numeric_version_rejected(self):
+        with pytest.raises(ValueError, match="numeric string"):
+            UpdateSkillRequest(skill_id="skill_abc", default_version="abc")
+
+    def test_zero_version_rejected(self):
+        with pytest.raises(ValueError, match="positive integer"):
+            UpdateSkillRequest(skill_id="skill_abc", default_version="0")
+
+    def test_negative_version_rejected(self):
+        with pytest.raises(ValueError, match="positive integer"):
+            UpdateSkillRequest(skill_id="skill_abc", default_version="-1")
+
+
+class TestCleanupOnFailure:
+    """Tests for filesystem cleanup when KVStore operations fail."""
+
+    async def test_create_skill_cleans_up_on_kvstore_failure(self, storage_dir):
+        """If KVStore write fails after files are written, files are cleaned up."""
+        mock_config = MagicMock()
+        service = SkillServiceImpl(mock_config)
+        service.storage_dir = Path(storage_dir)
+
+        failing_kvstore = AsyncMock()
+        failing_kvstore.set = AsyncMock(side_effect=RuntimeError("KV write failed"))
+        service.kvstore = failing_kvstore
+
+        files = [_make_upload_file("SKILL.md", SAMPLE_MANIFEST)]
+
+        with pytest.raises(RuntimeError, match="KV write failed"):
+            await service.create_skill(files)
+
+        remaining = list(Path(storage_dir).iterdir())
+        assert remaining == [], f"Orphaned files not cleaned up: {remaining}"
+
+    async def test_create_version_cleans_up_on_kvstore_failure(self, skill_service, storage_dir):
+        """If KVStore write fails during version creation, the version dir is cleaned up."""
+        created = await skill_service.create_skill([_make_upload_file("SKILL.md", SAMPLE_MANIFEST)])
+
+        original_set = skill_service.kvstore.set
+
+        async def fail_on_version_set(key, value):
+            if VERSION_KEY_PREFIX in key and ":2" in key:
+                raise RuntimeError("KV write failed")
+            return await original_set(key, value)
+
+        skill_service.kvstore.set = fail_on_version_set
+
+        files = [_make_upload_file("SKILL.md", SAMPLE_MANIFEST_V2)]
+        with pytest.raises(RuntimeError, match="KV write failed"):
+            await skill_service.create_skill_version(
+                CreateSkillVersionRequest(skill_id=created.id),
+                files,
+            )
+
+        v2_dir = Path(storage_dir) / created.id / "v2"
+        assert not v2_dir.exists(), "Version directory not cleaned up after failure"

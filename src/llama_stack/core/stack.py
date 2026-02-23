@@ -64,6 +64,7 @@ from llama_stack_api import (
     Scoring,
     ScoringFunctions,
     Shields,
+    Skills,
     ToolGroups,
     ToolRuntime,
     VectorIO,
@@ -96,6 +97,7 @@ class LlamaStack(
     Prompts,
     Conversations,
     Connectors,
+    Skills,
 ):
     pass
 

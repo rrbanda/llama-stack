@@ -4,6 +4,7 @@
 # This source code is licensed under the terms described in the LICENSE file in
 # the root directory of this source tree.
 
+import asyncio
 import json
 import os
 import shutil
@@ -79,6 +80,17 @@ class SkillServiceImpl(Skills):
     def _version_key_prefix(self, skill_id: str) -> str:
         return f"{VERSION_KEY_PREFIX}{skill_id}:"
 
+    @staticmethod
+    def _parse_version(value: str) -> int:
+        """Parse a version string into a positive integer."""
+        try:
+            v = int(value)
+        except (ValueError, TypeError):
+            raise ValueError(f"Invalid version: {value!r}; must be a positive integer") from None
+        if v < 1:
+            raise ValueError(f"Invalid version: {v}; must be a positive integer")
+        return v
+
     async def initialize(self):
         """Initialize the skill service."""
         skills_ref = self.config.config.storage.stores.skills
@@ -151,27 +163,32 @@ class SkillServiceImpl(Skills):
 
         skill_id = f"skill_{uuid.uuid4().hex[:24]}"
         created_at = int(time.time())
+        version_dir = self._version_dir(skill_id, 1)
 
-        self._write_files(self._version_dir(skill_id, 1), file_map)
+        await asyncio.to_thread(self._write_files, version_dir, file_map)
 
-        skill = Skill(
-            id=skill_id,
-            created_at=created_at,
-            default_version="1",
-            description=description,
-            latest_version="1",
-            name=name,
-        )
-        await self.kvstore.set(self._get_key(skill_id), json.dumps(skill.model_dump()))
+        try:
+            skill = Skill(
+                id=skill_id,
+                created_at=created_at,
+                default_version="1",
+                description=description,
+                latest_version="1",
+                name=name,
+            )
+            await self.kvstore.set(self._get_key(skill_id), json.dumps(skill.model_dump()))
 
-        version = SkillVersion(
-            version=1,
-            created_at=created_at,
-            skill_id=skill_id,
-            name=name,
-            description=description,
-        )
-        await self.kvstore.set(self._version_key(skill_id, 1), json.dumps(version.model_dump()))
+            version = SkillVersion(
+                version=1,
+                created_at=created_at,
+                skill_id=skill_id,
+                name=name,
+                description=description,
+            )
+            await self.kvstore.set(self._version_key(skill_id, 1), json.dumps(version.model_dump()))
+        except Exception:
+            await asyncio.to_thread(shutil.rmtree, self._skill_dir(skill_id), True)
+            raise
 
         return skill
 
@@ -219,7 +236,8 @@ class SkillServiceImpl(Skills):
         """Update a skill's default version."""
         skill = await self.get_skill(GetSkillRequest(skill_id=request.skill_id))
 
-        version_json = await self.kvstore.get(self._version_key(request.skill_id, int(request.default_version)))
+        version_num = self._parse_version(request.default_version)
+        version_json = await self.kvstore.get(self._version_key(request.skill_id, version_num))
         if not version_json:
             raise ValueError(f"Version {request.default_version} does not exist for skill {request.skill_id}")
 
@@ -242,7 +260,7 @@ class SkillServiceImpl(Skills):
 
         skill_dir = self._skill_dir(request.skill_id)
         if skill_dir.exists():
-            shutil.rmtree(skill_dir)
+            await asyncio.to_thread(shutil.rmtree, skill_dir)
 
         return DeletedSkill(id=request.skill_id, deleted=True)
 
@@ -250,13 +268,13 @@ class SkillServiceImpl(Skills):
         """Download a skill version's content as a zip archive."""
         skill = await self.get_skill(GetSkillRequest(skill_id=request.skill_id))
 
-        version = request.version if request.version is not None else int(skill.default_version)
+        version = request.version if request.version is not None else self._parse_version(skill.default_version)
 
         content_dir = self._version_dir(request.skill_id, version)
         if not content_dir.exists():
             raise SkillNotFoundError(request.skill_id)
 
-        zip_bytes = self._zip_directory(content_dir)
+        zip_bytes = await asyncio.to_thread(self._zip_directory, content_dir)
         return Response(
             content=zip_bytes,
             media_type="application/zip",
@@ -277,27 +295,32 @@ class SkillServiceImpl(Skills):
         file_map = await self._build_file_map(files)
         name, description = extract_metadata(file_map)
 
-        new_version = int(skill.latest_version) + 1
+        new_version = self._parse_version(skill.latest_version) + 1
         created_at = int(time.time())
+        version_dir = self._version_dir(request.skill_id, new_version)
 
-        self._write_files(self._version_dir(request.skill_id, new_version), file_map)
+        await asyncio.to_thread(self._write_files, version_dir, file_map)
 
-        version = SkillVersion(
-            version=new_version,
-            created_at=created_at,
-            skill_id=request.skill_id,
-            name=name,
-            description=description,
-        )
-        await self.kvstore.set(
-            self._version_key(request.skill_id, new_version),
-            json.dumps(version.model_dump()),
-        )
+        try:
+            version = SkillVersion(
+                version=new_version,
+                created_at=created_at,
+                skill_id=request.skill_id,
+                name=name,
+                description=description,
+            )
+            await self.kvstore.set(
+                self._version_key(request.skill_id, new_version),
+                json.dumps(version.model_dump()),
+            )
 
-        skill.latest_version = str(new_version)
-        skill.name = name
-        skill.description = description
-        await self.kvstore.set(self._get_key(request.skill_id), json.dumps(skill.model_dump()))
+            skill.latest_version = str(new_version)
+            skill.name = name
+            skill.description = description
+            await self.kvstore.set(self._get_key(request.skill_id), json.dumps(skill.model_dump()))
+        except Exception:
+            await asyncio.to_thread(shutil.rmtree, version_dir, True)
+            raise
 
         return version
 

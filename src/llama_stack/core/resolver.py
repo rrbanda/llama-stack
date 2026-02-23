@@ -55,6 +55,7 @@ from llama_stack_api import (
     ScoringFunctionsProtocolPrivate,
     Shields,
     ShieldsProtocolPrivate,
+    Skills,
     ToolGroups,
     ToolGroupsProtocolPrivate,
     ToolRuntime,
@@ -107,6 +108,7 @@ def api_protocol_map(external_apis: dict[Api, ExternalApiSpec] | None = None) ->
         Api.conversations: Conversations,
         Api.file_processors: FileProcessors,
         Api.connectors: Connectors,
+        Api.skills: Skills,
     }
 
     if external_apis:
